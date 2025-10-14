@@ -800,13 +800,17 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 
 	payload := base64.StdEncoding.EncodeToString(append(iv, encrypted...))
 
-	// **↓↓↓ 修正后的代码块 ↓↓↓**
+	var respBody []byte
 	res, err := base.RestyClient.R().
 		SetHeaders(map[string]string{
-			"x-useragent":  fmt.Sprintf("androidsdk|%s|android%s|6.1.1.0|||1220x2574|", device["phone_type"], device["android_version"]),
-			"x-deviceinfo": fmt.Sprintf("1|127.0.0.1|5|6.1.1.0|%s|%s|%s|android %s|1220x2574|android|||", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
-			"content-type": "application/json; charset=utf-8",
-			"user-agent":   "okhttp/4.11.0",
+			"Host":                "user-njs.yun.139.com",
+			"hcy-cool-flag":       "1",
+			"x-huawei-channelsrc": "10214502",
+			"x-mm-source":         "0",
+			"x-useragent":         fmt.Sprintf("androidsdk|%s|android%s|6.1.1.0|||1220x2574|", device["phone_type"], device["android_version"]),
+			"x-deviceinfo":        fmt.Sprintf("1|127.0.0.1|5|6.1.1.0|%s|%s|%s|android %s|1220x2574|android|||", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
+			"content-type":        "application/json; charset=utf-8",
+			"user-agent":          "okhttp/4.11.0",
 		}).
 		SetBody(payload).
 		Post(URL)
@@ -814,21 +818,22 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 	if err != nil {
 		return "", err
 	}
-	
-	// 检查HTTP状态码
-	if res.StatusCode() != http.StatusOK {
-		return "", fmt.Errorf("step3 failed with status code %d: %s", res.StatusCode(), res.String())
+	respBody = res.Body()
+
+	log.Debugf("Step 3 Raw Response: %s", string(respBody))
+
+	// Check if the response is a JSON error
+	if len(respBody) > 0 && respBody[0] == '{' {
+		var errorResp BaseResp
+		if err := utils.Json.Unmarshal(respBody, &errorResp); err == nil && !errorResp.Success {
+			return "", fmt.Errorf("step3 failed with server error: %s", errorResp.Message)
+		}
 	}
 
-	respStr := res.String() // 直接从响应对象获取原始字符串
-
-	// **↑↑↑ 修正后的代码块 ↑↑↑**
-
 	// Layer 1 Decryption
-	decoded, err := base64.StdEncoding.DecodeString(respStr)
-
+	decoded, err := base64.StdEncoding.DecodeString(string(respBody))
 	if err != nil {
-		return "", fmt.Errorf("step3 response base64 decode failed: %w", err)
+		return "", fmt.Errorf("step3 response base64 decode failed: %w. Raw response: %s", err, string(respBody))
 	}
 	resIv := decoded[:16]
 	resCiphertext := decoded[16:]
@@ -861,10 +866,12 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 
 	account := utils.Json.Get(finalJsonBytes, "account").ToString()
 	authToken := utils.Json.Get(finalJsonBytes, "authToken").ToString()
-	if account == "" || authToken == "" {
-		return "", errors.New("step3 final decrypt failed: account or authToken is empty")
+	userDomainId := utils.Json.Get(finalJsonBytes, "userDomainId").ToString()
+	if account == "" || authToken == "" || userDomainId == "" {
+		return "", errors.New("step3 final decrypt failed: account, authToken or userDomainId is empty")
 	}
 
+	d.UserDomainId = userDomainId
 	newAuthorization := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("pc:%s:%s", account, authToken)))
 	return newAuthorization, nil
 }
@@ -900,11 +907,13 @@ func (d *Yun139) loginWithPassword() (string, error) {
 	log.Infof("Step 3 success, new authorization generated.")
 
 	// TODO: Implement step 4, 5 if needed for other modes, but for drive, this is enough.
-	
+	d.Authorization = newAuth // Ensure Authorization is also updated before saving
+	op.MustSaveDriverStorage(d)
 	return newAuth, nil
 }
 
-var andAlbumAesKey, _ = hex.DecodeString("6433333131333938386435616d626134")
+
+var andAlbumAesKey, _ = hex.DecodeString("73634235495062495331515373756c734e7253306c673d3d") // Corrected AES key
 
 // sortedJsonStringify recursively sorts keys of maps within the data and then marshals to a JSON string.
 func sortedJsonStringify(data interface{}) (string, error) {
@@ -919,11 +928,18 @@ func sortedJsonStringify(data interface{}) (string, error) {
 func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interface{}) ([]byte, error) {
 	url := "https://group.yun.139.com/hcy/family/adapter/andAlbum/openApi" + pathname
 
+	var device map[string]interface{}
+	err := utils.Json.UnmarshalFromString(d.DeviceProfile, &device)
+	if err != nil {
+		return nil, fmt.Errorf("andAlbum: failed to parse device_profile: %w", err)
+	}
+
 	// 1. Marshal and sort the request body
 	sortedJson, err := sortedJsonStringify(body)
 	if err != nil {
 		return nil, fmt.Errorf("andAlbum: failed to marshal and sort body: %w", err)
 	}
+	log.Errorf("andAlbum: Request Body (plaintext): %s", sortedJson)
 
 	// 2. Encrypt the body
 	iv := []byte(random.String(16))
@@ -936,13 +952,19 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	// 3. Make the request
 	res, err := base.RestyClient.R().
 		SetHeaders(map[string]string{
+			"Host":                "group.yun.139.com",
 			"authorization":       "Basic " + d.getAuthorization(),
 			"x-svctype":           "2",
 			"hcy-cool-flag":       "1",
 			"api-version":         "v2",
 			"x-huawei-channelsrc": "10214502",
+			"x-sdk-channelsrc":    "",
+			"x-mm-source":         "0",
+			"x-useragent":         fmt.Sprintf("androidsdk|%s|android%s|6.1.1.1|||1220x1951|10214502", device["phone_type"], device["android_version"]),
+			"x-deviceinfo":        fmt.Sprintf("4|127.0.0.1|5|6.1.1.1|%s|%s|%s|android %s|1220x1951|android|||", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
 			"content-type":        "application/json; charset=utf-8",
 			"user-agent":          "okhttp/4.11.0",
+			"accept-encoding":     "gzip",
 		}).
 		SetBody(payload).
 		Post(url)
@@ -959,15 +981,29 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	respBody := res.Body()
 	var decryptedBytes []byte
 
+	log.Debugf("andAlbum: Raw Response Body Length: %d", len(respBody)) // Reverted to Debugf
+	log.Debugf("andAlbum: Raw Response Body: %s", string(respBody))     // Reverted to Debugf
+
 	// Check if the response is likely a JSON object
 	if len(respBody) > 0 && respBody[0] == '{' {
 		log.Warnf("andAlbum: received a plain JSON response, not an encrypted string. Body: %s", string(respBody))
 		decryptedBytes = respBody
 	} else {
 		// Assume it's a Base64 encoded string and try to decrypt
-		decodedResp, err := base64.StdEncoding.DecodeString(string(respBody))
+		cleanedBody := strings.TrimSpace(string(respBody)) // Trim whitespace
+
+		// Add padding if missing
+		if len(cleanedBody)%4 != 0 {
+			padding := 4 - len(cleanedBody)%4
+			for i := 0; i < padding; i++ {
+				cleanedBody += "="
+			}
+			log.Warnf("andAlbum: Added %d padding characters to Base64 body. Cleaned body after padding: '%s'", padding, cleanedBody)
+		}
+
+		decodedResp, err := base64.StdEncoding.DecodeString(cleanedBody) // Use cleanedBody
 		if err != nil {
-			return nil, fmt.Errorf("andAlbum: response base64 decode failed: %w. Body: %s", err, string(respBody))
+			return nil, fmt.Errorf("andAlbum: response base64 decode failed: %w. Cleaned body: '%s'", err, cleanedBody)
 		}
 
 		if len(decodedResp) < 16 {
@@ -991,6 +1027,7 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 			log.Errorf("andAlbum: failed to unmarshal decrypted response. Decrypted content: %s", string(decryptedBytes))
 			return nil, fmt.Errorf("andAlbum: failed to unmarshal decrypted response: %w", err)
 		}
+		log.Errorf("andAlbum: Response Body (decrypted): %s", string(decryptedBytes))
 	}
 
 	return decryptedBytes, nil

@@ -19,6 +19,7 @@ import (
 	"github.com/alist-org/alist/v3/pkg/cron"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/pkg/utils/random"
+	"github.com/google/uuid" // Import uuid
 	log "github.com/sirupsen/logrus"
 )
 
@@ -454,7 +455,7 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		body := base.Json{
 			"commonAccountInfo": base.Json{
 				"accountType": "1",
-				"accountUserId": d.Account,
+				"accountUserId": d.UserDomainId,
 			},
 			"destCatalogID":    dstDir.GetID(),
 			"destCloudID":      d.CloudID,
@@ -808,25 +809,56 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 		if d.isFamily() {
 			// New AndAlbum API for family cloud upload
 			pathname := "/getFileUploadURLV3"
+
+			var targetCatalogID string
+			if dstDir.GetID() == "" || dstDir.GetID() == "root" {
+				targetCatalogID = "" // For root directory, pass empty catalogID to queryContentList
+			} else {
+				targetCatalogID = dstDir.GetID()
+			}
+
+			data := d.newJson(base.Json{
+				"catalogID":       targetCatalogID,
+				"contentSortType": 0,
+				"pageInfo": base.Json{
+					"pageNum":  1,
+					"pageSize": 1,
+				},
+				"sortDirection": 1,
+			})
+			var queryResp QueryContentListResp
+			_, err := d.post("/orchestration/familyCloud-rebuild/content/v1.2/queryContentList", data, &queryResp)
+			if err != nil {
+				return fmt.Errorf("failed to get path for destination directory: %w", err)
+			}
+			dstDirPath := queryResp.Data.Path
+			if dstDirPath == "" {
+				// Fallback if queryContentList returns empty path for root, though it shouldn't based on user's curl.
+				dstDirPath = "root:/"
+			}
+			log.Errorf("andAlbum: DEBUG - dstDir.GetID(): '%s', targetCatalogID: '%s', queryResp.Data.Path: '%s', final dstDirPath: '%s'", dstDir.GetID(), targetCatalogID, queryResp.Data.Path, dstDirPath)
+
 			uploadBody := base.Json{
 				"catalogType": 3,
 				"cloudID":     d.CloudID,
 				"cloudType":   1,
 				"commonAccountInfo": base.Json{
 					"accountType": "1",
-					"accountUserId": d.Account, // Assuming d.Account holds the UserID
+					"accountUserId": d.UserDomainId, // Use the correct UserDomainId
 				},
 				"fileCount":    1,
 				"manualRename": 3,
-				"path":         path.Join(dstDir.GetPath(), dstDir.GetID()) + "/",
-				"seqNo":        fmt.Sprintf("%s_%s", "10214502", random.String(32)),
+				"path":         dstDirPath, // Use the obtained full path
+				"seqNo":        fmt.Sprintf("%s_%s", "10214502", uuid.New().String()), // Use UUID for seqNo
 				"totalSize":    reportSize,
 				"uploadContentList": []base.Json{{
 					"contentName": stream.GetName(),
 					"contentSize": reportSize,
-					// "digest": "..." // MD5 digest can be added here if available
+					"digest":      stream.GetHash().GetHash(utils.MD5),
 				}},
 			}
+			uploadBodyStr, _ := utils.Json.MarshalToString(uploadBody)
+			log.Errorf("andAlbum: DEBUG - uploadBody before request: %s", uploadBodyStr)
 			var resp AndAlbumUploadResp
 			_, err = d.andAlbumRequest(pathname, uploadBody, &resp)
 			if err != nil {

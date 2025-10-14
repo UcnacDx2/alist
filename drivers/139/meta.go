@@ -10,6 +10,7 @@ type Addition struct {
 	Password             string `json:"password" required:"true" secret:"true"`
 	DeviceProfile        string `json:"device_profile" required:"true" type:"text"`
 	Authorization        string `json:"authorization" type:"text"`
+	UserDomainId         string `json:"user_domain_id"`
 	driver.RootID
 	Type                 string `json:"type" type:"select" options:"personal_new,family,group,personal" default:"personal_new"`
 	CloudID              string `json:"cloud_id"`
