@@ -889,7 +889,7 @@ func (d *Yun139) loginWithPassword() (string, error) {
 
 // From Apifox doc, key for AndAlbum APIs
 // TODO: This key may need to be configured or obtained dynamically.
-var andAlbumAesKey, _ = hex.DecodeString("...some...hex...key...") // Placeholder
+var andAlbumAesKey, _ = hex.DecodeString("6433333131333938386435616d626134")
 
 // sortedJsonStringify sorts the keys of a JSON object and its nested objects, then stringifies it.
 func sortedJsonStringify(data interface{}) (string, error) {
