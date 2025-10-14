@@ -764,7 +764,10 @@ func aesCbcDecrypt(data, key, iv []byte) ([]byte, error) {
 
 func (d *Yun139) step3_third_party_login(token string, device map[string]interface{}) (string, error) {
 	const URL = "https://user-njs.yun.139.com/user/thirdlogin"
-	key1, _ := hex.DecodeString("73634235495062495331515373756c734e7253306c673d3d")
+	var err error
+	var finalJsonBytes []byte
+
+	key1, _ := hex.DecodeString("73634235495062495331515373756c7s4e7253306c673d3d")
 	key2, _ := hex.DecodeString("7150714477323633586746674c337538")
 	iv := []byte(random.String(16))
 
@@ -830,9 +833,7 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 		return "", errors.New("step3 first layer decrypt failed: data is empty")
 	}
 
-	// Layer 2 Decryption (ECB in Apifox doc is wrong, it should be CBC with a different key but same IV logic)
 	// The provided JS code for layer 2 is AES-ECB, which doesn't use an IV.
-	key2, _ := hex.DecodeString("7150714477323633586746674c337538")
 	hexInnerBytes, _ := hex.DecodeString(hexInner)
 
 	block, err := aes.NewCipher(key2)
