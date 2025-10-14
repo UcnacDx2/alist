@@ -832,11 +832,10 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 
 	// Layer 2 Decryption (ECB in Apifox doc is wrong, it should be CBC with a different key but same IV logic)
 	// The provided JS code for layer 2 is AES-ECB, which doesn't use an IV.
-	// Let's implement a temporary ECB decryptor as per the JS logic.
-	key2Bytes, _ := hex.DecodeString("7150714477323633586746674c337538")
+	key2, _ := hex.DecodeString("7150714477323633586746674c337538")
 	hexInnerBytes, _ := hex.DecodeString(hexInner)
 
-	block, err := aes.NewCipher(key2Bytes)
+	block, err := aes.NewCipher(key2)
 	if err != nil {
 		return "", fmt.Errorf("step3 failed to create cipher for layer2: %w", err)
 	}
@@ -899,18 +898,10 @@ var andAlbumAesKey, _ = hex.DecodeString("6433333131333938386435616d626134")
 
 // sortedJsonStringify recursively sorts keys of maps within the data and then marshals to a JSON string.
 func sortedJsonStringify(data interface{}) (string, error) {
-	// A custom implementation to match the behavior of the JS script more closely.
-	var buf bytes.Buffer
-	encoder := jsoniter.NewEncoder(&buf)
-	encoder.SetSortMapKeys(true)
-
-	// This is a simplified version. For deep sorting, a recursive function
-	// to traverse and sort all nested maps would be required.
-	// However, for the known structures, jsoniter's SortMapKeys should suffice.
+	// For the known structures, jsoniter's SortMapKeys should suffice.
 	json := jsoniter.Config{
 		SortMapKeys: true,
 	}.Froze()
-
 	res, err := json.MarshalToString(data)
 	return res, err
 }
