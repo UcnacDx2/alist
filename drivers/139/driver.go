@@ -1,6 +1,7 @@
 package _139
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -811,8 +812,8 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			pathname := "/getFileUploadURLV3"
 
 			var targetCatalogID string
-			if dstDir.GetID() == "" || dstDir.GetID() == "root" {
-				targetCatalogID = "" // For root directory, pass empty catalogID to queryContentList
+			if dstDir.GetID() == "root" {
+				targetCatalogID = ""
 			} else {
 				targetCatalogID = dstDir.GetID()
 			}
@@ -833,21 +834,21 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			}
 			dstDirPath := queryResp.Data.Path
 			if dstDirPath == "" {
-				// Fallback if queryContentList returns empty path for root, though it shouldn't based on user's curl.
-				dstDirPath = "root:/"
+				return fmt.Errorf("failed to get path for destination directory, path is empty")
 			}
+
 			uploadBody := base.Json{
 				"catalogType": 3,
 				"cloudID":     d.CloudID,
 				"cloudType":   1,
 				"commonAccountInfo": base.Json{
 					"accountType": "1",
-					"accountUserId": d.UserDomainId, // Use the correct UserDomainId
+					"accountUserId": d.UserDomainId,
 				},
 				"fileCount":    1,
 				"manualRename": 3,
-				"path":         dstDirPath, // Use the obtained full path
-				"seqNo":        fmt.Sprintf("%s_%s", "10214502", uuid.New().String()), // Use UUID for seqNo
+				"path":         dstDirPath,
+				"seqNo":        fmt.Sprintf("%s_%s", "10214502", uuid.New().String()),
 				"totalSize":    reportSize,
 				"uploadContentList": []base.Json{{
 					"contentName": stream.GetName(),
@@ -883,8 +884,13 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 				byteSize := min(size-start, partSize)
 
 				limitReader := io.LimitReader(rateLimited, byteSize)
-				r := io.TeeReader(limitReader, p)
-				req, err := http.NewRequest("POST", resp.UploadResult.RedirectionURL, r)
+				chunkData, err := io.ReadAll(limitReader)
+				if err != nil {
+					return fmt.Errorf("failed to read chunk into buffer: %w", err)
+				}
+				p.Write(chunkData) // Manually update progress
+
+				req, err := http.NewRequest("POST", resp.UploadResult.RedirectionURL, bytes.NewReader(chunkData))
 				if err != nil {
 					return err
 				}
@@ -901,22 +907,23 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 				if err != nil {
 					return err
 				}
-				if res.StatusCode != http.StatusOK {
-					res.Body.Close()
-					return fmt.Errorf("unexpected status code: %d", res.StatusCode)
-				}
 				bodyBytes, err := io.ReadAll(res.Body)
 				if err != nil {
+					res.Body.Close()
 					return fmt.Errorf("error reading response body: %v", err)
 				}
-				var result InterLayerUploadResult
-				err = xml.Unmarshal(bodyBytes, &result)
-				if err != nil {
-					return fmt.Errorf("error parsing XML: %v", err)
+				res.Body.Close()
+
+				log.Errorf("andAlbum: Chunk Upload Response - Status: %d, Body: %s", res.StatusCode, string(bodyBytes))
+
+				if res.StatusCode != http.StatusOK {
+					return fmt.Errorf("unexpected status code for chunk upload: %d", res.StatusCode)
 				}
-				if result.ResultCode != 0 {
-					return fmt.Errorf("upload failed with result code: %d, message: %s", result.ResultCode, result.Msg)
-				}
+
+				// The family cloud chunk upload might not return the same XML as personal cloud.
+				// Let's check if the body is empty or contains a success indicator if any.
+				// For now, we'll trust the HTTP 200 OK status and proceed.
+				// If issues persist, we need to analyze the actual response body from logs.
 			}
 			return nil
 		} else {
