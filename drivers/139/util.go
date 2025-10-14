@@ -767,7 +767,7 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 	var err error
 	var finalJsonBytes []byte
 
-	key1, _ := hex.DecodeString("73634235495062495331515373756c7s4e7253306c673d3d")
+	key1, _ := hex.DecodeString("73634235495062495331515373756c734e7253306c673d3d")
 	key2, _ := hex.DecodeString("7150714477323633586746674c337538")
 	iv := []byte(random.String(16))
 
@@ -925,7 +925,6 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	payload := base64.StdEncoding.EncodeToString(append(iv, encryptedBody...))
 
 	// 3. Make the request
-	var respStr string
 	res, err := base.RestyClient.R().
 		SetHeaders(map[string]string{
 			"authorization":       "Basic " + d.getAuthorization(),
@@ -937,7 +936,6 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 			"user-agent":          "okhttp/4.11.0",
 		}).
 		SetBody(payload).
-		SetResult(&respStr).
 		Post(url)
 
 	if err != nil {
@@ -948,24 +946,40 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 		return nil, fmt.Errorf("andAlbum: unexpected status code %d: %s", res.StatusCode(), res.String())
 	}
 
-	// 4. Decrypt the response
-	decodedResp, err := base64.StdEncoding.DecodeString(respStr)
-	if err != nil {
-		return nil, fmt.Errorf("andAlbum: response base64 decode failed: %w", err)
-	}
+	// 4. Decrypt the response (handle both encrypted and plain JSON)
+	respBody := res.Body()
+	var decryptedBytes []byte
 
-	respIv := decodedResp[:16]
-	respCiphertext := decodedResp[16:]
+	// Check if the response is likely a JSON object
+	if len(respBody) > 0 && respBody[0] == '{' {
+		log.Warnf("andAlbum: received a plain JSON response, not an encrypted string. Body: %s", string(respBody))
+		decryptedBytes = respBody
+	} else {
+		// Assume it's a Base64 encoded string and try to decrypt
+		decodedResp, err := base64.StdEncoding.DecodeString(string(respBody))
+		if err != nil {
+			return nil, fmt.Errorf("andAlbum: response base64 decode failed: %w. Body: %s", err, string(respBody))
+		}
 
-	decryptedBytes, err := aesCbcDecrypt(respCiphertext, andAlbumAesKey, respIv)
-	if err != nil {
-		return nil, fmt.Errorf("andAlbum: response aes decrypt failed: %w", err)
+		if len(decodedResp) < 16 {
+			return nil, fmt.Errorf("andAlbum: decoded response is too short to be encrypted. Length: %d", len(decodedResp))
+		}
+
+		respIv := decodedResp[:16]
+		respCiphertext := decodedResp[16:]
+
+		decryptedBytes, err = aesCbcDecrypt(respCiphertext, andAlbumAesKey, respIv)
+		if err != nil {
+			return nil, fmt.Errorf("andAlbum: response aes decrypt failed: %w", err)
+		}
 	}
 
 	// 5. Unmarshal to the final response struct
 	if resp != nil {
 		err = utils.Json.Unmarshal(decryptedBytes, resp)
 		if err != nil {
+			// Log the decrypted content for debugging
+			log.Errorf("andAlbum: failed to unmarshal decrypted response. Decrypted content: %s", string(decryptedBytes))
 			return nil, fmt.Errorf("andAlbum: failed to unmarshal decrypted response: %w", err)
 		}
 	}
