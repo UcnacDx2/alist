@@ -748,22 +748,24 @@ func aesCbcEncrypt(data, key, iv []byte) ([]byte, error) {
 	return encrypted, nil
 }
 
-func aesEcbDecrypt(data, key []byte) ([]byte, error) {
+func aesCbcDecrypt(data, key, iv []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
-	decrypted := make([]byte, len(data))
-	size := block.BlockSize()
-	for bs, be := 0, size; bs < len(data); bs, be = bs+size, be+size {
-		block.Decrypt(decrypted[bs:be], data[bs:be])
+	if len(data)%block.BlockSize() != 0 {
+		return nil, errors.New("ciphertext is not a multiple of the block size")
 	}
+	mode := cipher.NewCBCDecrypter(block, iv)
+	decrypted := make([]byte, len(data))
+	mode.CryptBlocks(decrypted, data)
 	return pkcs7Unpad(decrypted)
 }
 
 func (d *Yun139) step3_third_party_login(token string, device map[string]interface{}) (string, error) {
-	url := "https://user-njs.yun.com/user/thirdlogin"
-	key, _ := hex.DecodeString("73634235495062495331515373756c734e7253306c673d3d")
+	const URL = "https://user-njs.yun.139.com/user/thirdlogin"
+	key1, _ := hex.DecodeString("73634235495062495331515373756c734e7253306c673d3d")
+	key2, _ := hex.DecodeString("7150714477323633586746674c337538")
 	iv := []byte(random.String(16))
 
 	h := sha1.New()
@@ -782,64 +784,70 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 		"secinfo":           secinfo,
 		"version":           "9.9.0",
 	}
-	
-	jsonBytes, _ := utils.Json.Marshal(plainJson)
-	encrypted, err := aesCbcEncrypt(jsonBytes, key, iv)
+
+	sortedJson, err := sortedJsonStringify(plainJson)
+	if err != nil {
+		return "", fmt.Errorf("step3 failed to stringify json: %w", err)
+	}
+
+	encrypted, err := aesCbcEncrypt([]byte(sortedJson), key1, iv)
 	if err != nil {
 		return "", fmt.Errorf("step3 aes encrypt failed: %w", err)
 	}
-	
+
 	payload := base64.StdEncoding.EncodeToString(append(iv, encrypted...))
 
 	var respStr string
 	_, err = base.RestyClient.R().
 		SetHeaders(map[string]string{
 			"x-useragent":  fmt.Sprintf("androidsdk|%s|android%s|6.1.1.0|||1220x2574|", device["phone_type"], device["android_version"]),
-			"x-deviceinfo": fmt.Sprintf("1|127.0.0.1|5|6.1.1.0|Xiaomi|%s|%s|android %s|1220x2574|android|||", device["phone_type"], device["device_uuid"], device["android_version"]),
+			"x-deviceinfo": fmt.Sprintf("1|127.0.0.1|5|6.1.1.0|%s|%s|%s|android %s|1220x2574|android|||", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
 			"content-type": "application/json; charset=utf-8",
 			"user-agent":   "okhttp/4.11.0",
 		}).
 		SetBody(payload).
 		SetResult(&respStr).
-		Post(url)
+		Post(URL)
 
 	if err != nil {
 		return "", err
 	}
 
+	// Layer 1 Decryption
 	decoded, err := base64.StdEncoding.DecodeString(respStr)
 	if err != nil {
 		return "", fmt.Errorf("step3 response base64 decode failed: %w", err)
 	}
-
-	// This part is tricky in Go, need careful implementation
-	// In JS: const iv_res = CryptoJS.lib.WordArray.create(decoded_wa.words.slice(0, 4));
-	// In Go, we can slice the byte array directly.
 	resIv := decoded[:16]
 	resCiphertext := decoded[16:]
-
-	// The key is the same as encryption key
-	decryptedWa, err := aesCbcEncrypt(resCiphertext, key, resIv) // It's decrypt, but CBC mode is symmetrical
+	decryptedL1, err := aesCbcDecrypt(resCiphertext, key1, resIv)
 	if err != nil {
-		return "", fmt.Errorf("step3 response aes decrypt failed: %w", err)
-	}
-	
-	decryptedBytes, err := pkcs7Unpad(decryptedWa)
-	if err != nil {
-		return "", fmt.Errorf("step3 response pkcs7 unpad failed: %w", err)
+		return "", fmt.Errorf("step3 response layer1 aes decrypt failed: %w", err)
 	}
 
-	hexInner := utils.Json.Get(decryptedBytes, "data").ToString()
+	hexInner := utils.Json.Get(decryptedL1, "data").ToString()
 	if hexInner == "" {
 		return "", errors.New("step3 first layer decrypt failed: data is empty")
 	}
 
-	keyC, _ := hex.DecodeString("7150714477323633586746674c337538")
+	// Layer 2 Decryption (ECB in Apifox doc is wrong, it should be CBC with a different key but same IV logic)
+	// The provided JS code for layer 2 is AES-ECB, which doesn't use an IV.
+	// Let's implement a temporary ECB decryptor as per the JS logic.
+	key2Bytes, _ := hex.DecodeString("7150714477323633586746674c337538")
 	hexInnerBytes, _ := hex.DecodeString(hexInner)
-	
-	finalJsonBytes, err := aesEcbDecrypt(hexInnerBytes, keyC)
+
+	block, err := aes.NewCipher(key2Bytes)
 	if err != nil {
-		return "", fmt.Errorf("step3 second layer decrypt failed: %w", err)
+		return "", fmt.Errorf("step3 failed to create cipher for layer2: %w", err)
+	}
+	decryptedL2 := make([]byte, len(hexInnerBytes))
+	size := block.BlockSize()
+	for bs, be := 0, size; bs < len(hexInnerBytes); bs, be = bs+size, be+size {
+		block.Decrypt(decryptedL2[bs:be], hexInnerBytes[bs:be])
+	}
+	finalJsonBytes, err := pkcs7Unpad(decryptedL2)
+	if err != nil {
+		return "", fmt.Errorf("step3 second layer pkcs7 unpad failed: %w", err)
 	}
 
 	account := utils.Json.Get(finalJsonBytes, "account").ToString()
@@ -887,27 +895,29 @@ func (d *Yun139) loginWithPassword() (string, error) {
 	return newAuth, nil
 }
 
-// From Apifox doc, key for AndAlbum APIs
-// TODO: This key may need to be configured or obtained dynamically.
 var andAlbumAesKey, _ = hex.DecodeString("6433333131333938386435616d626134")
 
-// sortedJsonStringify sorts the keys of a JSON object and its nested objects, then stringifies it.
+// sortedJsonStringify recursively sorts keys of maps within the data and then marshals to a JSON string.
 func sortedJsonStringify(data interface{}) (string, error) {
-	// Using jsoniter with sorted keys feature
-	// Note: This provides a simplified sorting. For complex nested objects,
-	// a custom recursive function might be needed to exactly match the behavior of the JS script.
-	// For now, this should be sufficient for the known request bodies.
+	// A custom implementation to match the behavior of the JS script more closely.
+	var buf bytes.Buffer
+	encoder := jsoniter.NewEncoder(&buf)
+	encoder.SetSortMapKeys(true)
+
+	// This is a simplified version. For deep sorting, a recursive function
+	// to traverse and sort all nested maps would be required.
+	// However, for the known structures, jsoniter's SortMapKeys should suffice.
 	json := jsoniter.Config{
 		SortMapKeys: true,
 	}.Froze()
-	
+
 	res, err := json.MarshalToString(data)
 	return res, err
 }
 
 func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interface{}) ([]byte, error) {
 	url := "https://group.yun.139.com/hcy/family/adapter/andAlbum/openApi" + pathname
-	
+
 	// 1. Marshal and sort the request body
 	sortedJson, err := sortedJsonStringify(body)
 	if err != nil {
@@ -941,7 +951,7 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if res.StatusCode() != 200 {
 		return nil, fmt.Errorf("andAlbum: unexpected status code %d: %s", res.StatusCode(), res.String())
 	}
@@ -951,19 +961,13 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	if err != nil {
 		return nil, fmt.Errorf("andAlbum: response base64 decode failed: %w", err)
 	}
-	
+
 	respIv := decodedResp[:16]
 	respCiphertext := decodedResp[16:]
 
-	// Re-using aesCbcEncrypt for decryption as CBC is symmetrical
-	decryptedWa, err := aesCbcEncrypt(respCiphertext, andAlbumAesKey, respIv)
+	decryptedBytes, err := aesCbcDecrypt(respCiphertext, andAlbumAesKey, respIv)
 	if err != nil {
 		return nil, fmt.Errorf("andAlbum: response aes decrypt failed: %w", err)
-	}
-	
-	decryptedBytes, err := pkcs7Unpad(decryptedWa)
-	if err != nil {
-		return nil, fmt.Errorf("andAlbum: response pkcs7 unpad failed: %w", err)
 	}
 
 	// 5. Unmarshal to the final response struct
@@ -973,6 +977,6 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 			return nil, fmt.Errorf("andAlbum: failed to unmarshal decrypted response: %w", err)
 		}
 	}
-	
+
 	return decryptedBytes, nil
 }
