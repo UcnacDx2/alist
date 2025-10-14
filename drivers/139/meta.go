@@ -6,9 +6,9 @@ import (
 )
 
 type Addition struct {
-	Username             string `json:"username" required:"false"`
-	Password             string `json:"password" required:"false" type:"password"`
-	DeviceProfile        string `json:"device_profile" required:"false" type:"text"`
+	Username             string `json:"username" required:"true"`
+	Password             string `json:"password" required:"true" secret:"true"`
+	DeviceProfile        string `json:"device_profile" required:"true" type:"text"`
 	Authorization        string `json:"authorization" type:"text"`
 	driver.RootID
 	Type                 string `json:"type" type:"select" options:"personal_new,family,group,personal" default:"personal_new"`

@@ -844,7 +844,7 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 	for bs, be := 0, size; bs < len(hexInnerBytes); bs, be = bs+size, be+size {
 		block.Decrypt(decryptedL2[bs:be], hexInnerBytes[bs:be])
 	}
-	finalJsonBytes, err := pkcs7Unpad(decryptedL2)
+	finalJsonBytes, err = pkcs7Unpad(decryptedL2)
 	if err != nil {
 		return "", fmt.Errorf("step3 second layer pkcs7 unpad failed: %w", err)
 	}
