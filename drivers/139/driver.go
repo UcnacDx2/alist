@@ -836,8 +836,6 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 				// Fallback if queryContentList returns empty path for root, though it shouldn't based on user's curl.
 				dstDirPath = "root:/"
 			}
-			log.Errorf("andAlbum: DEBUG - dstDir.GetID(): '%s', targetCatalogID: '%s', queryResp.Data.Path: '%s', final dstDirPath: '%s'", dstDir.GetID(), targetCatalogID, queryResp.Data.Path, dstDirPath)
-
 			uploadBody := base.Json{
 				"catalogType": 3,
 				"cloudID":     d.CloudID,
@@ -857,8 +855,6 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 					"digest":      stream.GetHash().GetHash(utils.MD5),
 				}},
 			}
-			uploadBodyStr, _ := utils.Json.MarshalToString(uploadBody)
-			log.Errorf("andAlbum: DEBUG - uploadBody before request: %s", uploadBodyStr)
 			var resp AndAlbumUploadResp
 			_, err = d.andAlbumRequest(pathname, uploadBody, &resp)
 			if err != nil {

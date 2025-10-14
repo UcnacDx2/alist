@@ -939,7 +939,7 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	if err != nil {
 		return nil, fmt.Errorf("andAlbum: failed to marshal and sort body: %w", err)
 	}
-	log.Errorf("andAlbum: Request Body (plaintext): %s", sortedJson)
+	log.Debugf("andAlbum: Request Body (plaintext): %s", sortedJson)
 
 	// 2. Encrypt the body
 	iv := []byte(random.String(16))
@@ -981,8 +981,8 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	respBody := res.Body()
 	var decryptedBytes []byte
 
-	log.Debugf("andAlbum: Raw Response Body Length: %d", len(respBody)) // Reverted to Debugf
-	log.Debugf("andAlbum: Raw Response Body: %s", string(respBody))     // Reverted to Debugf
+	log.Debugf("andAlbum: Raw Response Body Length: %d", len(respBody))
+	log.Debugf("andAlbum: Raw Response Body: %s", string(respBody))
 
 	// Check if the response is likely a JSON object
 	if len(respBody) > 0 && respBody[0] == '{' {
@@ -1024,10 +1024,10 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 		err = utils.Json.Unmarshal(decryptedBytes, resp)
 		if err != nil {
 			// Log the decrypted content for debugging
-			log.Errorf("andAlbum: failed to unmarshal decrypted response. Decrypted content: %s", string(decryptedBytes))
+			log.Debugf("andAlbum: failed to unmarshal decrypted response. Decrypted content: %s", string(decryptedBytes))
 			return nil, fmt.Errorf("andAlbum: failed to unmarshal decrypted response: %w", err)
 		}
-		log.Errorf("andAlbum: Response Body (decrypted): %s", string(decryptedBytes))
+		log.Debugf("andAlbum: Response Body (decrypted): %s", string(decryptedBytes))
 	}
 
 	return decryptedBytes, nil
