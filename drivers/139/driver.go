@@ -958,6 +958,7 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			}
 		}
 		return nil
+		}
 	default:
 		return errs.NotImplement
 	}
