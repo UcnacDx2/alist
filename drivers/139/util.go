@@ -628,7 +628,7 @@ func (d *Yun139) getAccount() string {
 	}
 	return d.Account
 }
-func (d *Yun1s39) getPersonalCloudHost() string {
+func (d *Yun139) getPersonalCloudHost() string {
 	if d.ref != nil {
 		return d.ref.getPersonalCloudHost()
 	}
