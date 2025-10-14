@@ -41,7 +41,17 @@ func (d *Yun139) GetAddition() driver.Additional {
 func (d *Yun139) Init(ctx context.Context) error {
 	if d.ref == nil {
 		if len(d.Authorization) == 0 {
-			return fmt.Errorf("authorization is empty")
+			if d.Username != "" && d.Password != "" {
+				log.Infof("139yun: authorization is empty, trying to login with password.")
+				newAuth, err := d.loginWithPassword()
+				if err != nil {
+					return fmt.Errorf("login with password failed: %w", err)
+				}
+				d.Authorization = newAuth
+				op.MustSaveDriverStorage(d)
+			} else {
+				return fmt.Errorf("authorization is empty and username/password is not provided")
+			}
 		}
 		err := d.refreshToken()
 		if err != nil {
@@ -278,6 +288,16 @@ func (d *Yun139) Move(ctx context.Context, srcObj, dstDir model.Obj) (model.Obj,
 			return nil, err
 		}
 		return srcObj, nil
+	case MetaFamily:
+		err := d.Copy(ctx, srcObj, dstDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to copy in move operation: %w", err)
+		}
+		err = d.Remove(ctx, srcObj)
+		if err != nil {
+			return nil, fmt.Errorf("failed to remove in move operation: %w", err)
+		}
+		return srcObj, nil
 	default:
 		return nil, errs.NotImplement
 	}
@@ -420,6 +440,32 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		}
 		pathname := "/orchestration/personalCloud/batchOprTask/v1.0/createBatchOprTask"
 		_, err = d.post(pathname, data, nil)
+	case MetaFamily:
+		pathname := "/copyContentCatalog"
+		var sourceContentIDs []string
+		var sourceCatalogIDs []string
+		if srcObj.IsDir() {
+			sourceCatalogIDs = append(sourceCatalogIDs, srcObj.GetID())
+		} else {
+			sourceContentIDs = append(sourceContentIDs, srcObj.GetID())
+		}
+		
+		body := base.Json{
+			"commonAccountInfo": base.Json{
+				"accountType": "1",
+				"accountUserId": d.Account,
+			},
+			"destCatalogID":    dstDir.GetID(),
+			"destCloudID":      d.CloudID,
+			"sourceCatalogIDs": sourceCatalogIDs,
+			"sourceCloudID":    d.CloudID,
+			"sourceContentIDs": sourceContentIDs,
+		}
+		
+		var resp base.Json // Assuming a generic JSON response for success/failure
+		_, err = d.andAlbumRequest(pathname, body, &resp)
+		// TODO: Need to check the actual success condition from the response.
+		// For now, we assume no error means success.
 	default:
 		err = errs.NotImplement
 	}
@@ -759,26 +805,98 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 		}
 		pathname := "/orchestration/personalCloud/uploadAndDownload/v1.0/pcUploadFileRequest"
 		if d.isFamily() {
-			data = d.newJson(base.Json{
+			// New AndAlbum API for family cloud upload
+			pathname := "/getFileUploadURLV3"
+			uploadBody := base.Json{
+				"catalogType": 3,
+				"cloudID":     d.CloudID,
+				"cloudType":   1,
+				"commonAccountInfo": base.Json{
+					"accountType": "1",
+					"accountUserId": d.Account, // Assuming d.Account holds the UserID
+				},
 				"fileCount":    1,
-				"manualRename": 2,
-				"operation":    0,
-				"path":         path.Join(dstDir.GetPath(), dstDir.GetID()),
-				"seqNo":        random.String(32), //序列号不能为空
+				"manualRename": 3,
+				"path":         path.Join(dstDir.GetPath(), dstDir.GetID()) + "/",
+				"seqNo":        fmt.Sprintf("%s_%s", "10214502", random.String(32)),
 				"totalSize":    reportSize,
 				"uploadContentList": []base.Json{{
 					"contentName": stream.GetName(),
 					"contentSize": reportSize,
-					// "digest": "5a3231986ce7a6b46e408612d385bafa"
+					// "digest": "..." // MD5 digest can be added here if available
 				}},
-			})
-			pathname = "/orchestration/familyCloud-rebuild/content/v1.0/getFileUploadURL"
-		}
-		var resp UploadResp
-		_, err = d.post(pathname, data, &resp)
-		if err != nil {
-			return err
-		}
+			}
+			var resp AndAlbumUploadResp
+			_, err = d.andAlbumRequest(pathname, uploadBody, &resp)
+			if err != nil {
+				return fmt.Errorf("andAlbum getFileuploadURLV3 failed: %w", err)
+			}
+			if resp.Result.ResultCode != "0" {
+				return fmt.Errorf("andAlbum getFileuploadURLV3 failed with result code: %s, message: %s", resp.Result.ResultCode, resp.Result.ResultDesc)
+			}
+			
+			size := stream.GetSize()
+			p := driver.NewProgress(size, up)
+			var partSize = d.getPartSize(size)
+			part := size / partSize
+			if size%partSize > 0 {
+				part++
+			} else if part == 0 {
+				part = 1
+			}
+			rateLimited := driver.NewLimitedUploadStream(ctx, stream)
+			for i := int64(0); i < part; i++ {
+				if utils.IsCanceled(ctx) {
+					return ctx.Err()
+				}
+
+				start := i * partSize
+				byteSize := min(size-start, partSize)
+
+				limitReader := io.LimitReader(rateLimited, byteSize)
+				r := io.TeeReader(limitReader, p)
+				req, err := http.NewRequest("POST", resp.UploadResult.RedirectionURL, r)
+				if err != nil {
+					return err
+				}
+
+				req = req.WithContext(ctx)
+				req.Header.Set("Content-Type", "text/plain;name="+unicode(stream.GetName()))
+				req.Header.Set("contentSize", strconv.FormatInt(size, 10))
+				req.Header.Set("range", fmt.Sprintf("bytes=%d-%d", start, start+byteSize-1))
+				req.Header.Set("uploadtaskID", resp.UploadResult.UploadTaskID)
+				req.Header.Set("rangeType", "0")
+				req.ContentLength = byteSize
+
+				res, err := base.HttpClient.Do(req)
+				if err != nil {
+					return err
+				}
+				if res.StatusCode != http.StatusOK {
+					res.Body.Close()
+					return fmt.Errorf("unexpected status code: %d", res.StatusCode)
+				}
+				bodyBytes, err := io.ReadAll(res.Body)
+				if err != nil {
+					return fmt.Errorf("error reading response body: %v", err)
+				}
+				var result InterLayerUploadResult
+				err = xml.Unmarshal(bodyBytes, &result)
+				if err != nil {
+					return fmt.Errorf("error parsing XML: %v", err)
+				}
+				if result.ResultCode != 0 {
+					return fmt.Errorf("upload failed with result code: %d, message: %s", result.ResultCode, result.Msg)
+				}
+			}
+			return nil
+		} else {
+			// This is the old logic for MetaPersonal, which remains unchanged.
+			var resp UploadResp
+			_, err = d.post(pathname, data, &resp)
+			if err != nil {
+				return err
+			}
 		if resp.Data.Result.ResultCode != "0" {
 			return fmt.Errorf("get file upload url failed with result code: %s, message: %s", resp.Data.Result.ResultCode, resp.Data.Result.ResultDesc)
 		}

@@ -312,3 +312,18 @@ type RefreshTokenResp struct {
 	AccessToken string   `xml:"accessToken"`
 	Desc        string   `xml:"desc"`
 }
+
+type AndAlbumUploadResp struct {
+	Result struct {
+		ResultCode string `json:"resultCode"`
+		ResultDesc string `json:"resultDesc"`
+	} `json:"result"`
+	UploadResult struct {
+		UploadTaskID     string `json:"uploadTaskID"`
+		RedirectionURL   string `json:"redirectionUrl"`
+		NewContentIDList []struct {
+			ContentID   string `json:"contentID"`
+			ContentName string `json:"contentName"`
+		} `json:"newContentIDList"`
+	} `json:"uploadResult"`
+}
