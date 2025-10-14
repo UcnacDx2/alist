@@ -800,8 +800,8 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 
 	payload := base64.StdEncoding.EncodeToString(append(iv, encrypted...))
 
-	var respStr string
-	_, err = base.RestyClient.R().
+	// **↓↓↓ 修正后的代码块 ↓↓↓**
+	res, err := base.RestyClient.R().
 		SetHeaders(map[string]string{
 			"x-useragent":  fmt.Sprintf("androidsdk|%s|android%s|6.1.1.0|||1220x2574|", device["phone_type"], device["android_version"]),
 			"x-deviceinfo": fmt.Sprintf("1|127.0.0.1|5|6.1.1.0|%s|%s|%s|android %s|1220x2574|android|||", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
@@ -809,15 +809,24 @@ func (d *Yun139) step3_third_party_login(token string, device map[string]interfa
 			"user-agent":   "okhttp/4.11.0",
 		}).
 		SetBody(payload).
-		SetResult(&respStr).
 		Post(URL)
 
 	if err != nil {
 		return "", err
 	}
+	
+	// 检查HTTP状态码
+	if res.StatusCode() != http.StatusOK {
+		return "", fmt.Errorf("step3 failed with status code %d: %s", res.StatusCode(), res.String())
+	}
+
+	respStr := res.String() // 直接从响应对象获取原始字符串
+
+	// **↑↑↑ 修正后的代码块 ↑↑↑**
 
 	// Layer 1 Decryption
 	decoded, err := base64.StdEncoding.DecodeString(respStr)
+
 	if err != nil {
 		return "", fmt.Errorf("step3 response base64 decode failed: %w", err)
 	}
