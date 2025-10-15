@@ -75,6 +75,9 @@ type Copy interface {
 type Remove interface {
 	Remove(ctx context.Context, obj model.Obj) error
 }
+type CrossStorageCopier interface {
+	CrossStorageCopy(ctx context.Context, srcObj model.Obj, dstDriver Driver, dstDir model.Obj) error
+}
 
 type Put interface {
 	// Put a file (provided as a FileStreamer) into the driver

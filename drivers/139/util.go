@@ -1039,3 +1039,39 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 
 	return decryptedBytes, nil
 }
+
+func (d *Yun139) isboPost(pathname string, body interface{}, resp interface{}) ([]byte, error) {
+	url := "https://group.yun.139.com/hcy/mutual/adapter" + pathname
+	var device map[string]interface{}
+	err := utils.Json.UnmarshalFromString(d.getDeviceProfile(), &device)
+	if err != nil {
+		return nil, fmt.Errorf("isbo: failed to parse device_profile: %w", err)
+	}
+
+	res, err := base.RestyClient.R().
+		SetHeaders(map[string]string{
+			"Host":                "group.yun.139.com",
+			"authorization":       "Basic " + d.getAuthorization(),
+			"x-svctype":           "1",
+			"x-huawei-channelsrc": "10000023",
+			"x-yun-uni":           "1039937905940819004", // This seems to be a static value from the curl
+			"x-clientoprtype":     "21",
+			"x-mm-source":         "032",
+			"x-deviceinfo":        fmt.Sprintf("6|127.0.0.1|1|12.3.2|%s|%s|%s|02-00-00-00-00-00|android %s|1220X2574|zh||||032|0|", device["phone_brand"], device["phone_type"], device["device_uuid"], device["android_version"]),
+			"x-nettype":           "6",
+			"user-agent":          "okhttp/4.12.0",
+		}).
+		SetBody(body).
+		SetResult(resp).
+		Post(url)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode() != 200 {
+		return nil, fmt.Errorf("isbo: unexpected status code %d: %s", res.StatusCode(), res.String())
+	}
+
+	return res.Body(), nil
+}

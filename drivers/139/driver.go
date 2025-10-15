@@ -450,6 +450,52 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		pathname := "/orchestration/personalCloud/batchOprTask/v1.0/createBatchOprTask"
 		_, err = d.post(pathname, data, nil)
 	case MetaFamily:
+		// Check if the destination is a personal cloud
+		if dstStorage, _, err := op.GetStorageAndActualPath(dstDir.GetPath()); err == nil {
+			if dstDriver, ok := dstStorage.(*Yun139); ok {
+				if dstDriver.Type == MetaPersonal || dstDriver.Type == MetaPersonalNew {
+					pathname := "/isbo/openApi/createBatchOprTask"
+					var contentList []string
+					var catalogList []string
+					if srcObj.IsDir() {
+						catalogList = append(catalogList, srcObj.GetID())
+					} else {
+						contentList = append(contentList, srcObj.GetID())
+					}
+
+					body := CreateBatchOprTaskReq{
+						CatalogList: catalogList,
+						AccountInfo: struct {
+							AccountName string `json:"accountName"`
+							AccountType string `json:"accountType"`
+						}{
+							AccountName: d.getAccount(),
+							AccountType: "1",
+						},
+						ContentList:   contentList,
+						DestCatalogID: dstDir.GetID(),
+						DestGroupID:   "", // Personal cloud has no group ID
+						DestPath:      dstDir.GetPath(),
+						DestType:      3, // 3 for personal cloud
+						SrcGroupID:    d.CloudID,
+						SrcType:       2, // 2 for family cloud
+						TaskType:      1, // 1 for copy
+					}
+
+					var resp CreateBatchOprTaskResp
+					_, err = d.isboPost(pathname, body, &resp)
+					if err != nil {
+						return err
+					}
+					if resp.Result.ResultCode != "0" {
+						return fmt.Errorf("failed to copy from family to personal: %s", resp.Result.ResultDesc)
+					}
+					return nil
+				}
+			}
+		}
+
+		// Fallback to the original logic for intra-family copy
 		pathname := "/copyContentCatalog"
 		var sourceContentIDs []string
 		var sourceCatalogIDs []string
@@ -458,10 +504,10 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		} else {
 			sourceContentIDs = append(sourceContentIDs, srcObj.GetID())
 		}
-		
+
 		body := base.Json{
 			"commonAccountInfo": base.Json{
-				"accountType": "1",
+				"accountType":   "1",
 				"accountUserId": d.UserDomainId,
 			},
 			"destCatalogID":    dstDir.GetID(),
@@ -470,7 +516,7 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 			"sourceCloudID":    d.CloudID,
 			"sourceContentIDs": sourceContentIDs,
 		}
-		
+
 		var resp base.Json // Assuming a generic JSON response for success/failure
 		_, err = d.andAlbumRequest(pathname, body, &resp)
 		// TODO: Need to check the actual success condition from the response.
@@ -926,3 +972,54 @@ func (d *Yun139) Other(ctx context.Context, args model.OtherArgs) (interface{}, 
 }
 
 var _ driver.Driver = (*Yun139)(nil)
+
+func (d *Yun139) CrossStorageCopy(ctx context.Context, srcObj model.Obj, dstDriver driver.Driver, dstDir model.Obj) error {
+	if d.Type != MetaFamily {
+		return errs.NotImplement
+	}
+	dstYun139, ok := dstDriver.(*Yun139)
+	if !ok {
+		return errs.NotImplement
+	}
+	if !(dstYun139.Type == MetaPersonal || dstYun139.Type == MetaPersonalNew) {
+		return errs.NotImplement
+	}
+
+	pathname := "/isbo/openApi/createBatchOprTask"
+	var contentList []string
+	var catalogList []string
+	if srcObj.IsDir() {
+		catalogList = append(catalogList, srcObj.GetID())
+	} else {
+		contentList = append(contentList, srcObj.GetID())
+	}
+
+	body := CreateBatchOprTaskReq{
+		CatalogList: catalogList,
+		AccountInfo: struct {
+			AccountName string `json:"accountName"`
+			AccountType string `json:"accountType"`
+		}{
+			AccountName: d.getAccount(),
+			AccountType: "1",
+		},
+		ContentList:   contentList,
+		DestCatalogID: dstDir.GetID(),
+		DestGroupID:   "", // Personal cloud has no group ID
+		DestPath:      dstDir.GetPath(),
+		DestType:      3, // 3 for personal cloud
+		SrcGroupID:    d.CloudID,
+		SrcType:       2, // 2 for family cloud
+		TaskType:      1, // 1 for copy
+	}
+
+	var resp CreateBatchOprTaskResp
+	_, err := d.isboPost(pathname, body, &resp)
+	if err != nil {
+		return err
+	}
+	if resp.Result.ResultCode != "0" {
+		return fmt.Errorf("failed to copy from family to personal: %s", resp.Result.ResultDesc)
+	}
+	return nil
+}

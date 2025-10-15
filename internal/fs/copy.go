@@ -76,6 +76,21 @@ func _copy(ctx context.Context, srcObjPath, dstDirPath string, lazyCache ...bool
 			return nil, err
 		}
 	}
+	// cross storage copy
+	if copier, ok := srcStorage.(driver.CrossStorageCopier); ok {
+		srcObj, err := op.Get(ctx, srcStorage, srcObjActualPath)
+		if err != nil {
+			return nil, err
+		}
+		dstDir, err := op.Get(ctx, dstStorage, dstDirActualPath)
+		if err != nil {
+			return nil, err
+		}
+		err = copier.CrossStorageCopy(ctx, srcObj, dstStorage, dstDir)
+		if !errors.Is(err, errs.NotImplement) {
+			return nil, err
+		}
+	}
 	if ctx.Value(conf.NoTaskKey) != nil {
 		srcObj, err := op.Get(ctx, srcStorage, srcObjActualPath)
 		if err != nil {
