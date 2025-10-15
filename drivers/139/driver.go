@@ -450,7 +450,32 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		pathname := "/orchestration/personalCloud/batchOprTask/v1.0/createBatchOprTask"
 		_, err = d.post(pathname, data, nil)
 	case MetaGroup:
-		fallthrough
+		pathname := "/copyContentCatalog"
+		var sourceContentIDs []string
+		var sourceCatalogIDs []string
+		if srcObj.IsDir() {
+			sourceCatalogIDs = append(sourceCatalogIDs, path.Join("root:/", srcObj.GetPath(), srcObj.GetID()))
+		} else {
+			sourceContentIDs = append(sourceContentIDs, path.Join("root:/", srcObj.GetPath(), srcObj.GetID()))
+		}
+
+		destCatalogID := path.Join("root:/", dstDir.GetPath(), dstDir.GetID())
+		log.Debugf("[139Yun Group Copy] srcObj ID: %s, srcObj Path: %s, dstDir ID: %s, dstDir Path: %s, destCatalogID: %s", srcObj.GetID(), srcObj.GetPath(), dstDir.GetID(), dstDir.GetPath(), destCatalogID)
+
+		body := base.Json{
+			"commonAccountInfo": base.Json{
+				"accountType":   "1",
+				"accountUserId": d.ref.UserDomainId,
+			},
+			"destCatalogID":    destCatalogID,
+			"destCloudID":      d.CloudID,
+			"sourceCatalogIDs": sourceCatalogIDs,
+			"sourceCloudID":    d.CloudID,
+			"sourceContentIDs": sourceContentIDs,
+		}
+
+		var resp base.Json
+		_, err = d.andAlbumRequest(pathname, body, &resp)
 	case MetaFamily:
 		pathname := "/copyContentCatalog"
 		var sourceContentIDs []string
@@ -460,11 +485,11 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		} else {
 			sourceContentIDs = append(sourceContentIDs, srcObj.GetID())
 		}
-		
+
 		body := base.Json{
 			"commonAccountInfo": base.Json{
-				"accountType": "1",
-				"accountUserId": d.UserDomainId,
+				"accountType":   "1",
+				"accountUserId": d.ref.UserDomainId,
 			},
 			"destCatalogID":    dstDir.GetID(),
 			"destCloudID":      d.CloudID,
@@ -472,7 +497,7 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 			"sourceCloudID":    d.CloudID,
 			"sourceContentIDs": sourceContentIDs,
 		}
-		
+
 		var resp base.Json // Assuming a generic JSON response for success/failure
 		_, err = d.andAlbumRequest(pathname, body, &resp)
 		// TODO: Need to check the actual success condition from the response.
