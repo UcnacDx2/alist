@@ -635,6 +635,13 @@ func (d *Yun139) getPersonalCloudHost() string {
 	return d.PersonalCloudHost
 }
 
+func (d *Yun139) getDeviceProfile() string {
+	if d.ref != nil {
+		return d.ref.getDeviceProfile()
+	}
+	return d.DeviceProfile
+}
+
 func getMd5(dataStr string) string {
 	hash := md5.Sum([]byte(dataStr))
 	return fmt.Sprintf("%x", hash)
@@ -929,7 +936,7 @@ func (d *Yun139) andAlbumRequest(pathname string, body interface{}, resp interfa
 	url := "https://group.yun.139.com/hcy/family/adapter/andAlbum/openApi" + pathname
 
 	var device map[string]interface{}
-	err := utils.Json.UnmarshalFromString(d.DeviceProfile, &device)
+	err := utils.Json.UnmarshalFromString(d.getDeviceProfile(), &device)
 	if err != nil {
 		return nil, fmt.Errorf("andAlbum: failed to parse device_profile: %w", err)
 	}

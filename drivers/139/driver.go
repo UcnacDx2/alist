@@ -373,19 +373,27 @@ func (d *Yun139) Rename(ctx context.Context, srcObj model.Obj, newName string) e
 		var data base.Json
 		var pathname string
 		if srcObj.IsDir() {
-			// 网页接口不支持重命名家庭云文件夹
-			// data = base.Json{
-			// 	"catalogType": 3,
-			// 	"catalogID":   srcObj.GetID(),
-			// 	"catalogName": newName,
-			// 	"commonAccountInfo": base.Json{
-			// 		"account":     d.getAccount(),
-			// 		"accountType": 1,
-			// 	},
-			// 	"path": srcObj.GetPath(),
-			// }
-			// pathname = "/orchestration/familyCloud-rebuild/photoContent/v1.0/modifyCatalogInfo"
-			return errs.NotImplement
+			pathname = "/modifyCloudDocV2"
+			data = base.Json{
+				"catalogType": 3,
+				"cloudID":     d.CloudID,
+				"commonAccountInfo": base.Json{
+					"account":     d.getAccount(),
+					"accountType": "1",
+				},
+				"docLibName":   newName,
+				"docLibraryID": srcObj.GetID(),
+				"path":         path.Join(srcObj.GetPath(), srcObj.GetID()),
+			}
+			var resp ModifyCloudDocV2Resp
+			_, err = d.andAlbumRequest(pathname, data, &resp)
+			if err != nil {
+				return err
+			}
+			if resp.Result.ResultCode != "0" {
+				return fmt.Errorf("failed to rename family folder: %s", resp.Result.ResultDesc)
+			}
+			return nil
 		} else {
 			data = base.Json{
 				"contentID":   srcObj.GetID(),
