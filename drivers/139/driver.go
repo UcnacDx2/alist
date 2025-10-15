@@ -842,7 +842,7 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			},
 		}
 		pathname := "/orchestration/personalCloud/uploadAndDownload/v1.0/pcUploadFileRequest"
-		if d.isFamily() {
+		if d.isFamily() || d.Addition.Type == MetaGroup {
 			data = d.newJson(base.Json{
 				"fileCount":    1,
 				"manualRename": 2,
@@ -859,7 +859,9 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			pathname = "/orchestration/familyCloud-rebuild/content/v1.0/getFileUploadURL"
 		}
 		var resp UploadResp
+		log.Errorf("[139] getFileUploadURLV3 request: pathname=%s, data=%+v", pathname, data)
 		_, err = d.post(pathname, data, &resp)
+		log.Errorf("[139] getFileUploadURLV3 response: resp=%+v", resp)
 		if err != nil {
 			return err
 		}
