@@ -449,6 +449,8 @@ func (d *Yun139) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		}
 		pathname := "/orchestration/personalCloud/batchOprTask/v1.0/createBatchOprTask"
 		_, err = d.post(pathname, data, nil)
+	case MetaGroup:
+		fallthrough
 	case MetaFamily:
 		pathname := "/copyContentCatalog"
 		var sourceContentIDs []string
@@ -765,6 +767,8 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 		}
 		return nil
 	case MetaPersonal:
+		fallthrough
+	case MetaGroup:
 		fallthrough
 	case MetaFamily:
 		// 处理冲突
