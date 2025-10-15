@@ -1,7 +1,6 @@
 package _139
 
 import (
-	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -20,7 +19,6 @@ import (
 	"github.com/alist-org/alist/v3/pkg/cron"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/pkg/utils/random"
-	"github.com/google/uuid" // Import uuid
 	log "github.com/sirupsen/logrus"
 )
 
@@ -808,131 +806,26 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 		}
 		pathname := "/orchestration/personalCloud/uploadAndDownload/v1.0/pcUploadFileRequest"
 		if d.isFamily() {
-			// New AndAlbum API for family cloud upload
-			pathname := "/getFileUploadURLV3"
-
-			var targetCatalogID string
-			if dstDir.GetID() == "root" {
-				targetCatalogID = ""
-			} else {
-				targetCatalogID = dstDir.GetID()
-			}
-
-			data := d.newJson(base.Json{
-				"catalogID":       targetCatalogID,
-				"contentSortType": 0,
-				"pageInfo": base.Json{
-					"pageNum":  1,
-					"pageSize": 1,
-				},
-				"sortDirection": 1,
-			})
-			var queryResp QueryContentListResp
-			_, err := d.post("/orchestration/familyCloud-rebuild/content/v1.2/queryContentList", data, &queryResp)
-			if err != nil {
-				return fmt.Errorf("failed to get path for destination directory: %w", err)
-			}
-			dstDirPath := queryResp.Data.Path
-			if dstDirPath == "" {
-				return fmt.Errorf("failed to get path for destination directory, path is empty")
-			}
-
-			uploadBody := base.Json{
-				"catalogType": 3,
-				"cloudID":     d.CloudID,
-				"cloudType":   1,
-				"commonAccountInfo": base.Json{
-					"accountType": "1",
-					"accountUserId": d.UserDomainId,
-				},
+			data = d.newJson(base.Json{
 				"fileCount":    1,
-				"manualRename": 3,
-				"path":         dstDirPath,
-				"seqNo":        fmt.Sprintf("%s_%s", "10214502", uuid.New().String()),
+				"manualRename": 2,
+				"operation":    0,
+				"path":         path.Join(dstDir.GetPath(), dstDir.GetID()),
+				"seqNo":        random.String(32), //序列号不能为空
 				"totalSize":    reportSize,
 				"uploadContentList": []base.Json{{
 					"contentName": stream.GetName(),
 					"contentSize": reportSize,
-					"digest":      stream.GetHash().GetHash(utils.MD5),
+					// "digest": "5a3231986ce7a6b46e408612d385bafa"
 				}},
-			}
-			var resp AndAlbumUploadResp
-			_, err = d.andAlbumRequest(pathname, uploadBody, &resp)
-			if err != nil {
-				return fmt.Errorf("andAlbum getFileuploadURLV3 failed: %w", err)
-			}
-			if resp.Result.ResultCode != "0" {
-				return fmt.Errorf("andAlbum getFileuploadURLV3 failed with result code: %s, message: %s", resp.Result.ResultCode, resp.Result.ResultDesc)
-			}
-			
-			size := stream.GetSize()
-			p := driver.NewProgress(size, up)
-			var partSize = d.getPartSize(size)
-			part := size / partSize
-			if size%partSize > 0 {
-				part++
-			} else if part == 0 {
-				part = 1
-			}
-			rateLimited := driver.NewLimitedUploadStream(ctx, stream)
-			for i := int64(0); i < part; i++ {
-				if utils.IsCanceled(ctx) {
-					return ctx.Err()
-				}
-
-				start := i * partSize
-				byteSize := min(size-start, partSize)
-
-				limitReader := io.LimitReader(rateLimited, byteSize)
-				chunkData, err := io.ReadAll(limitReader)
-				if err != nil {
-					return fmt.Errorf("failed to read chunk into buffer: %w", err)
-				}
-				p.Write(chunkData) // Manually update progress
-
-				req, err := http.NewRequest("POST", resp.UploadResult.RedirectionURL, bytes.NewReader(chunkData))
-				if err != nil {
-					return err
-				}
-
-				req = req.WithContext(ctx)
-				req.Header.Set("Content-Type", "text/plain;name="+unicode(stream.GetName()))
-				req.Header.Set("contentSize", strconv.FormatInt(size, 10))
-				req.Header.Set("range", fmt.Sprintf("bytes=%d-%d", start, start+byteSize-1))
-				req.Header.Set("uploadtaskID", resp.UploadResult.UploadTaskID)
-				req.Header.Set("rangeType", "0")
-				req.ContentLength = byteSize
-
-				res, err := base.HttpClient.Do(req)
-				if err != nil {
-					return err
-				}
-				bodyBytes, err := io.ReadAll(res.Body)
-				if err != nil {
-					res.Body.Close()
-					return fmt.Errorf("error reading response body: %v", err)
-				}
-				res.Body.Close()
-
-				log.Errorf("andAlbum: Chunk Upload Response - Status: %d, Body: %s", res.StatusCode, string(bodyBytes))
-
-				if res.StatusCode != http.StatusOK {
-					return fmt.Errorf("unexpected status code for chunk upload: %d", res.StatusCode)
-				}
-
-				// The family cloud chunk upload might not return the same XML as personal cloud.
-				// Let's check if the body is empty or contains a success indicator if any.
-				// For now, we'll trust the HTTP 200 OK status and proceed.
-				// If issues persist, we need to analyze the actual response body from logs.
-			}
-			return nil
-		} else {
-			// This is the old logic for MetaPersonal, which remains unchanged.
-			var resp UploadResp
-			_, err = d.post(pathname, data, &resp)
-			if err != nil {
-				return err
-			}
+			})
+			pathname = "/orchestration/familyCloud-rebuild/content/v1.0/getFileUploadURL"
+		}
+		var resp UploadResp
+		_, err = d.post(pathname, data, &resp)
+		if err != nil {
+			return err
+		}
 		if resp.Data.Result.ResultCode != "0" {
 			return fmt.Errorf("get file upload url failed with result code: %s, message: %s", resp.Data.Result.ResultCode, resp.Data.Result.ResultDesc)
 		}
@@ -994,7 +887,6 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			}
 		}
 		return nil
-		}
 	default:
 		return errs.NotImplement
 	}
